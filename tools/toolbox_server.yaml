@@ -1,0 +1,10 @@
+sources:
+  alloydb-ca:
+    kind: alloydb-postgres
+    project: ${GOOGLE_CLOUD_PROJECT}
+    region: ${GOOGLE_CLOUD_REGION}
+    cluster: ca-cluster
+    instance: ca-instance
+    database: ca_productivity
+    user: ${ALLOYDB_USER}
+    password: ${ALLOYDB_PASSWORD}

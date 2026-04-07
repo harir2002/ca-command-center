@@ -1,0 +1,166 @@
+sources:
+  alloydb-ca:
+    kind: alloydb-postgres
+    project: ${GOOGLE_CLOUD_PROJECT}
+    region: ${GOOGLE_CLOUD_REGION}
+    cluster: ca-cluster
+    instance: ca-instance
+    database: ca_productivity
+    user: ${ALLOYDB_USER}
+    password: ${ALLOYDB_PASSWORD}
+
+toolsets:
+  ca-tools:
+    - get_upcoming_deadlines
+    - get_client_tasks
+    - get_overdue_filings
+    - add_task
+    - update_deadline_status
+    - get_all_clients
+    - get_pending_documents
+
+tools:
+  get_upcoming_deadlines:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Get all filing deadlines due within the next N days
+    parameters:
+      - name: days
+        type: integer
+        description: Number of days to look ahead (e.g. 7)
+    statement: |
+      SELECT c.name AS client_name,
+             d.filing_type,
+             TO_CHAR(d.due_date, 'DD-MM-YYYY') AS due_date,
+             d.status,
+             (d.due_date - CURRENT_DATE) AS days_remaining
+      FROM deadlines d
+      JOIN clients c ON d.client_id = c.id
+      WHERE d.due_date <= CURRENT_DATE + $1
+        AND d.due_date >= CURRENT_DATE
+        AND d.status = 'pending'
+      ORDER BY d.due_date ASC;
+
+  get_overdue_filings:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Get all overdue or missed filings past their due date
+    statement: |
+      SELECT c.name AS client_name,
+             d.filing_type,
+             TO_CHAR(d.due_date, 'DD-MM-YYYY') AS due_date,
+             (CURRENT_DATE - d.due_date) AS days_overdue,
+             c.contact
+      FROM deadlines d
+      JOIN clients c ON d.client_id = c.id
+      WHERE d.due_date < CURRENT_DATE
+        AND d.status = 'pending'
+      ORDER BY d.due_date ASC;
+
+  get_client_tasks:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Get all open tasks for a specific client by name
+    parameters:
+      - name: client_name
+        type: string
+        description: Full or partial name of the client
+    statement: |
+      SELECT t.id,
+             c.name AS client_name,
+             t.description,
+             t.priority,
+             TO_CHAR(t.due_date, 'DD-MM-YYYY') AS due_date,
+             t.status
+      FROM tasks t
+      JOIN clients c ON t.client_id = c.id
+      WHERE LOWER(c.name) LIKE LOWER('%' || $1 || '%')
+        AND t.status != 'done'
+      ORDER BY
+        CASE t.priority
+          WHEN 'high' THEN 1
+          WHEN 'medium' THEN 2
+          WHEN 'low' THEN 3
+        END,
+        t.due_date ASC;
+
+  add_task:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Add a new task for a client
+    parameters:
+      - name: client_id
+        type: integer
+        description: The numeric ID of the client
+      - name: description
+        type: string
+        description: Task description
+      - name: priority
+        type: string
+        description: Priority level - high, medium, or low
+      - name: due_date
+        type: string
+        description: Due date in YYYY-MM-DD format
+    statement: |
+      INSERT INTO tasks (client_id, description, priority, due_date, status)
+      VALUES ($1, $2, $3, $4::DATE, 'open')
+      RETURNING id,
+                description,
+                priority,
+                TO_CHAR(due_date, 'DD-MM-YYYY') AS due_date,
+                status;
+
+  update_deadline_status:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Mark a filing as completed/filed for a client
+    parameters:
+      - name: client_name
+        type: string
+        description: Full or partial client name
+      - name: filing_type
+        type: string
+        description: Filing type e.g. GSTR-3B, ITR-1, TDS Return Q4
+    statement: |
+      UPDATE deadlines d
+      SET status = 'filed'
+      FROM clients c
+      WHERE d.client_id = c.id
+        AND LOWER(c.name) LIKE LOWER('%' || $1 || '%')
+        AND LOWER(d.filing_type) LIKE LOWER('%' || $2 || '%')
+        AND d.status = 'pending'
+      RETURNING c.name AS client_name,
+                d.filing_type,
+                d.status,
+                TO_CHAR(d.due_date, 'DD-MM-YYYY') AS due_date;
+
+  get_all_clients:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Get list of all registered clients with their details
+    statement: |
+      SELECT id,
+             name,
+             pan_number,
+             gst_number,
+             contact,
+             category
+      FROM clients
+      ORDER BY name;
+
+  get_pending_documents:
+    kind: postgres-sql
+    source: alloydb-ca
+    description: Get clients who have not submitted any documents this month
+    statement: |
+      SELECT c.name AS client_name,
+             c.contact,
+             c.category,
+             c.gst_number
+      FROM clients c
+      WHERE c.id NOT IN (
+        SELECT DISTINCT client_id
+        FROM documents
+        WHERE received_date >= DATE_TRUNC('month', CURRENT_DATE)
+      )
+      ORDER BY c.name;

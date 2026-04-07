@@ -1,0 +1,9 @@
+google-adk>=1.0.0
+toolbox-core>=0.6.0
+google-cloud-alloydb-connector[asyncpg]
+asyncpg
+sqlalchemy
+python-dotenv
+uvicorn
+fastapi
+httpx
